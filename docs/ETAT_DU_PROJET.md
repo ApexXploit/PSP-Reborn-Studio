@@ -7,9 +7,12 @@ Dernière mise à jour : 13 juillet 2026.
 - Application native Tauri sur macOS Apple Silicon.
 - Assistant de création de projet inspiré de Visual Studio : langage, runtime et
   modèle d'exemple.
-- Projets C++ natifs avec quatre modèles : démarrage, contrôles, graphismes GU et
-  boucle de jeu.
-- Projets Lua avec quatre modèles : dessin, contrôles, image en mémoire et sprite.
+- Projets C++ natifs avec six modèles : démarrage, contrôles, graphismes GU,
+  boucle de jeu, audio PCM et sauvegarde.
+- Projets Lua avec six modèles : dessin, contrôles, image en mémoire, sprite,
+  timer et audio WAV avec ressource fournie.
+- Centre d'aide hors ligne : vingt articles recherchables couvrant les API
+  principales PSPSDK et LuaPlayer Plus, avec exemples copiables et provenance.
 - Catalogue de onze versions LuaPlayer HM/LuaPlayer Plus. LuaPlayer Plus r163 est
   embarqué et exécutable ; les versions historiques non récupérées sont clairement
   signalées comme telles.
@@ -27,7 +30,7 @@ Dernière mise à jour : 13 juillet 2026.
 
 ## Validation réelle effectuée
 
-Les quatre modèles C++ sont compilés par les tests avec le véritable toolchain
+Les six modèles C++ sont compilés par les tests avec le véritable toolchain
 PSPDEV, puis leurs PBP sont relus et validés. Le runtime LuaPlayer Plus r163
 embarqué est lui aussi vérifié comme PBP valide. Les projets de démonstration C++
 et Lua ont démarré dans PPSSPP ; la scène Lua graphique a été contrôlée visuellement.
@@ -46,4 +49,3 @@ Empreinte SHA-256 du runtime LuaPlayer Plus r163 embarqué :
 - Signature et notarisation macOS pour une distribution publique.
 - Builds Windows et Linux.
 - Autocomplétion PSPSDK via clangd.
-- Gestion multi-fichiers et ressources du projet.

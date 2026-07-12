@@ -401,8 +401,15 @@ fn copy_safe_tree(source: &Path, destination: &Path, overwrite: bool) -> Result<
 }
 
 fn valid_project_choice(language: &str, template: &str, runtime: Option<&str>) -> bool {
-    const CPP_TEMPLATES: &[&str] = &["hello", "controls", "graphics", "timer"];
-    const LUA_TEMPLATES: &[&str] = &["hello", "controls", "image", "sprite"];
+    const CPP_TEMPLATES: &[&str] = &[
+        "hello",
+        "controls",
+        "graphics",
+        "timer",
+        "audio",
+        "filesystem",
+    ];
+    const LUA_TEMPLATES: &[&str] = &["hello", "controls", "image", "sprite", "timer", "audio"];
     const LUA_RUNTIMES: &[&str] = &[
         "hm-v1.7",
         "hm-v2.0.4",
@@ -480,6 +487,38 @@ fn cpp_source_template(name: &str, template: &str) -> String {
         sceDisplayWaitVblankStart();
     }"#
         }
+        "audio" => {
+            r#"    constexpr int samples = 1024;
+    static short pcm[samples * 2];
+    for (int index = 0; index < samples; ++index) {
+        short value = (index / 32) % 2 ? 9000 : -9000;
+        pcm[index * 2] = value;
+        pcm[index * 2 + 1] = value;
+    }
+    int channel = sceAudioChReserve(PSP_AUDIO_NEXT_CHANNEL, samples, PSP_AUDIO_FORMAT_STEREO);
+    if (channel < 0) {
+        pspDebugScreenPrintf("Impossible de reserver un canal audio.\n");
+    } else {
+        pspDebugScreenPrintf("Lecture du signal PCM. Appuie sur HOME pour quitter.\n");
+        while (true) sceAudioOutputBlocking(channel, PSP_AUDIO_VOLUME_MAX, pcm);
+    }"#
+        }
+        "filesystem" => {
+            r#"    const char message[] = "niveau=3\nscore=1200\n";
+    SceUID file = sceIoOpen("save.txt", PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    if (file >= 0) {
+        sceIoWrite(file, message, sizeof(message) - 1);
+        sceIoClose(file);
+    }
+    char loaded[64] = {};
+    file = sceIoOpen("save.txt", PSP_O_RDONLY, 0);
+    if (file >= 0) {
+        sceIoRead(file, loaded, sizeof(loaded) - 1);
+        sceIoClose(file);
+    }
+    pspDebugScreenPrintf("Sauvegarde relue :\n%s\n", loaded);
+    while (true) sceDisplayWaitVblankStart();"#
+        }
         _ => {
             r#"    pspDebugScreenPrintf("Bonjour depuis PSP Reborn Studio !\n");
     pspDebugScreenPrintf("Ce code fonctionne dans PPSSPP et sur PSP.\n");
@@ -490,6 +529,8 @@ fn cpp_source_template(name: &str, template: &str) -> String {
         "controls" => "#include <pspctrl.h>\n#include <pspdisplay.h>",
         "graphics" => "#include <pspdisplay.h>\n#include <pspgu.h>\n\nstatic unsigned int __attribute__((aligned(16))) displayList[262144];",
         "timer" => "#include <pspdisplay.h>\n#include <psprtc.h>",
+        "audio" => "#include <pspaudio.h>",
+        "filesystem" => "#include <pspdisplay.h>\n#include <pspiofilemgr.h>",
         _ => "#include <pspdisplay.h>",
     };
     format!("#include <pspkernel.h>\n#include <pspdebug.h>\n{includes}\n\nPSP_MODULE_INFO(\"{name}\", PSP_MODULE_USER, 1, 0);\nPSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);\n\nint main() {{\n    pspDebugScreenInit();\n{body}\n    return 0;\n}}\n")
@@ -500,6 +541,8 @@ fn lua_source_template(template: &str) -> &'static str {
         "controls" => "x = 20\nwhile true do\n    pad = Controls.read()\n    if pad:left() then x = x - 2 end\n    if pad:right() then x = x + 2 end\n    screen:clear(Color.new(20, 24, 40))\n    screen:fillRect(x, 110, 32, 32, Color.new(130, 90, 255))\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
         "image" => "image = Image.createEmpty(160, 100)\nimage:clear(Color.new(120, 70, 230))\nwhile true do\n    screen:clear()\n    screen:blit(160, 86, image)\n    screen:print(175, 125, \"Image Lua\", Color.new(255,255,255))\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
         "sprite" => "sprite = Image.createEmpty(32, 32)\nsprite:clear(Color.new(130, 90, 255))\nx, y = 220, 120\nwhile true do\n    pad = Controls.read()\n    if pad:left() then x = x - 2 end\n    if pad:right() then x = x + 2 end\n    if pad:up() then y = y - 2 end\n    if pad:down() then y = y + 2 end\n    screen:clear()\n    screen:blit(x, y, sprite)\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
+        "timer" => "timer = Timer.new()\nwhile true do\n    elapsed = timer:time() / 1000\n    x = 220 + math.sin(elapsed * 2) * 120\n    screen:clear(Color.new(12, 18, 28))\n    screen:fillCircle(x, 136, 18, Color.new(80, 240, 120))\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
+        "audio" => "Wav.load(\"assets/sound.wav\", 0)\nWav.play(true, 0)\nwhile true do\n    pad = Controls.read()\n    screen:clear(Color.new(12, 18, 28))\n    screen:print(70, 120, \"CROIX: pause  ROND: reprendre\", Color.new(255,255,255))\n    if pad:cross() then Wav.pause(0) end\n    if pad:circle() then Wav.play(true, 0) end\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
         _ => "while true do\n    screen:clear(Color.new(24, 18, 62))\n    screen:fillRect(105, 70, 270, 132, Color.new(105, 70, 215))\n    screen:fillRect(125, 90, 230, 92, Color.new(18, 22, 36))\n    screen:fillRect(145, 115, 190, 42, Color.new(145, 105, 255))\n    screen.flip()\n    screen.waitVblankStart()\nend\n",
     }
 }
@@ -508,6 +551,7 @@ fn makefile_template(name: &str, template: &str) -> String {
     let libraries = match template {
         "graphics" => "LIBS = -lpspgu\n",
         "timer" => "LIBS = -lpsprtc\n",
+        "audio" => "LIBS = -lpspaudio\n",
         _ => "",
     };
     format!(
@@ -608,6 +652,18 @@ fn create_project(
         } else {
             fs::write(temporary.join("script.lua"), lua_source_template(&template))
                 .map_err(|error| error.to_string())?;
+            if template == "audio" {
+                let sound = app
+                    .path()
+                    .resource_dir()
+                    .map_err(|error| error.to_string())?
+                    .join("resources/examples/sound.wav");
+                if !sound.is_file() {
+                    return Err("La ressource audio d’exemple est absente".into());
+                }
+                fs::copy(sound, temporary.join("assets/sound.wav"))
+                    .map_err(|error| error.to_string())?;
+            }
         }
         let project = default_project(
             name.clone(),
@@ -1062,9 +1118,13 @@ mod tests {
     #[test]
     fn project_catalog_rejects_unknown_or_mixed_choices() {
         assert!(valid_project_choice("cpp", "graphics", None));
+        assert!(valid_project_choice("cpp", "audio", None));
+        assert!(valid_project_choice("cpp", "filesystem", None));
         assert!(!valid_project_choice("cpp", "sprite", None));
         assert!(!valid_project_choice("cpp", "hello", Some("hm-v7-rc1")));
         assert!(valid_project_choice("lua", "sprite", Some("hm-v7-rc1")));
+        assert!(valid_project_choice("lua", "timer", Some("lpp-r163")));
+        assert!(valid_project_choice("lua", "audio", Some("lpp-r163")));
         assert!(!valid_project_choice("lua", "sprite", Some("unknown")));
     }
 
@@ -1078,7 +1138,14 @@ mod tests {
         if !pspdev.join("bin/psp-g++").is_file() {
             return;
         }
-        for template in ["hello", "controls", "graphics", "timer"] {
+        for template in [
+            "hello",
+            "controls",
+            "graphics",
+            "timer",
+            "audio",
+            "filesystem",
+        ] {
             let directory = std::env::temp_dir().join(format!(
                 "psp-reborn-example-{}-{template}",
                 std::process::id()
@@ -1128,6 +1195,16 @@ mod tests {
         assert!(directory.join("lpp.ini").is_file());
         assert!(directory.join("License.txt").is_file());
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn lua_audio_example_bundles_a_pcm_wave() {
+        let sound = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/examples/sound.wav");
+        let data = fs::read(sound).unwrap();
+        assert!(data.len() > 44);
+        assert_eq!(&data[0..4], b"RIFF");
+        assert_eq!(&data[8..12], b"WAVE");
+        assert!(lua_source_template("audio").contains("assets/sound.wav"));
     }
 
     #[test]

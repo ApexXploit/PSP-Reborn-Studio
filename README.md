@@ -33,8 +33,10 @@ volontairement distinct du logo personnel ApeXploit.
 ## Fonctionnalités
 
 - assistant de projet inspiré de Visual Studio ;
-- projets C++17 natifs avec quatre exemples PSPDEV ;
+- projets C++17 natifs avec six exemples PSPDEV ;
 - projets Lua avec catalogue LuaPlayer HM et LuaPlayer Plus ;
+- douze projets d'exemple créables : six C++ et six Lua ;
+- centre d'aide hors ligne avec recherche, filtres et vingt exemples d'API ;
 - LuaPlayer Plus r163 embarqué et exécutable ;
 - éditeur Monaco C++/Lua entièrement local ;
 - explorateur multi-fichiers avec création, ouverture, renommage et suppression ;
@@ -101,3 +103,7 @@ cargo fmt --check
 cargo test
 cargo check
 ```
+
+Les tests Rust compilent réellement les six modèles C++ avec PSPDEV lorsqu'il
+est disponible. La documentation de l'aide intégrée est détaillée dans
+[`docs/AIDE_INTEGREE.md`](docs/AIDE_INTEGREE.md).

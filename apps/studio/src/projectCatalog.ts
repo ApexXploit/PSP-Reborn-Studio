@@ -32,11 +32,15 @@ export const templates = {
     { id: "controls", name: "Contrôles", description: "Lire la croix, les boutons et le stick analogique", features: ["Boutons", "Stick analogique"] },
     { id: "graphics", name: "Graphismes 2D", description: "Initialiser le GU et dessiner des formes colorées", features: ["PSP GU", "Double buffering"] },
     { id: "timer", name: "Boucle de jeu", description: "Delta time, compteur FPS et mise à jour régulière", features: ["Timer", "VBlank", "FPS"] },
+    { id: "audio", name: "Audio natif", description: "Générer et jouer un son stéréo sans ressource externe", features: ["sceAudio", "PCM", "Boucle audio"] },
+    { id: "filesystem", name: "Sauvegarde", description: "Écrire et relire un fichier de progression", features: ["sceIoOpen", "sceIoWrite", "Memory Stick"] },
   ],
   lua: [
     { id: "hello", name: "Bonjour Lua", description: "Dessiner une première scène avec LuaPlayer", features: ["screen:fillRect", "Couleurs", "Boucle Lua"] },
     { id: "controls", name: "Contrôles", description: "Lire les boutons PSP et déplacer un carré", features: ["Controls.read", "Croix directionnelle"] },
     { id: "image", name: "Image en mémoire", description: "Créer une image colorée et l’afficher à l’écran", features: ["Image.createEmpty", "screen:blit"] },
     { id: "sprite", name: "Sprite mobile", description: "Déplacer un sprite avec les commandes PSP", features: ["Image.createEmpty", "Contrôles", "Animation"] },
+    { id: "timer", name: "Timer et animation", description: "Mesurer le temps et animer une scène", features: ["Timer.new", "Timer:time", "VBlank"] },
+    { id: "audio", name: "Musique et effets", description: "Charger un fichier WAV depuis assets", features: ["Wav.load", "Wav.play", "Contrôles"] },
   ],
 } as const;
