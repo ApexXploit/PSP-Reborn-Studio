@@ -22,7 +22,7 @@ application.
   </tr>
   <tr>
     <td align="center"><strong>PSP Reborn Studio</strong></td>
-    <td align="center"><strong>ApeXploit</strong><br><a href="https://github.com/Yami-droid-dotcom">@Yami-droid-dotcom</a></td>
+    <td align="center"><strong>ApeXploit</strong><br><a href="https://github.com/ApexXploit">@ApexXploit</a></td>
   </tr>
 </table>
 
@@ -81,7 +81,7 @@ présents. Sinon, il utilise Docker ou Podman avec l'image officielle versionné
 
 ## Auteur
 
-Créé par **ApeXploit** — [Yami-droid-dotcom](https://github.com/Yami-droid-dotcom).
+Créé par **ApeXploit** — [ApexXploit](https://github.com/ApexXploit).
 
 PSP, PlayStation et Sony sont des marques de leurs propriétaires respectifs. Ce
 projet homebrew indépendant n'est ni affilié ni approuvé par Sony.

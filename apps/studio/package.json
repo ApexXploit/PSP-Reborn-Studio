@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "author": "ApeXploit <Yami-droid-dotcom>",
-  "homepage": "https://github.com/Yami-droid-dotcom/PSP-Reborn-Studio",
-  "repository": "github:Yami-droid-dotcom/PSP-Reborn-Studio",
+  "homepage": "https://github.com/ApexXploit/PSP-Reborn-Studio",
+  "repository": "github:ApexXploit/PSP-Reborn-Studio",
   "type": "module",
   "scripts": {
     "dev": "vite",
