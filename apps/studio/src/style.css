@@ -16,3 +16,20 @@
 .template-choice span{color:#69bd50}
 .welcome{background:radial-gradient(circle at center,#172b1b,#090d15 60%)}
 .welcome button{border-color:#66ca4a;background:#397b29}
+
+/* Project explorer */
+.project-list{display:grid;gap:6px;max-height:132px;overflow:auto}
+.explorer{display:flex;flex:1;min-height:150px;flex-direction:column;margin-top:8px;border-top:1px solid #263047;overflow:hidden}
+.explorer-head{display:flex;align-items:center;justify-content:space-between;padding:9px 2px 5px}
+.sidebar .explorer-head h3{margin:0 6px}
+.explorer-head>div{display:flex;gap:2px}
+.sidebar .explorer-head button{border:0;background:transparent;padding:4px;color:#aeb9cd;font-size:11px}
+.sidebar .explorer-head button:hover:not(:disabled){color:#78f346;background:#203c26}
+.file-tree{display:flex;flex:1;min-height:0;flex-direction:column;overflow:auto;padding:2px 0}
+.sidebar .file-entry{display:flex;align-items:center;gap:6px;width:100%;min-height:26px;border:0;border-radius:3px;background:transparent;padding-top:4px;padding-right:5px;padding-bottom:4px;color:#b8c2d4;white-space:nowrap}
+.sidebar .file-entry:hover{background:#1b2433}
+.sidebar .file-entry.selected{background:#253129}
+.sidebar .file-entry.open{color:#9df27e}
+.file-entry span{width:25px;color:#6fd34d;font-size:11px}
+.file-entry em{overflow:hidden;text-overflow:ellipsis;font-style:normal;font-size:12px}
+.explorer+.locked{margin-top:8px}

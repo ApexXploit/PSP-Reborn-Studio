@@ -14,6 +14,9 @@ Dernière mise à jour : 13 juillet 2026.
   embarqué et exécutable ; les versions historiques non récupérées sont clairement
   signalées comme telles.
 - Monaco Editor C++/Lua entièrement local et sauvegarde atomique.
+- Explorateur de projet multi-fichiers : dossiers repliables, création,
+  ouverture, renommage et suppression avec confinement et fichiers requis
+  protégés.
 - PSPDEV officiel v20260701 avec GCC PSP 15.2.0.
 - Compilation d'un véritable exécutable MIPS et d'un `EBOOT.PBP`.
 - PPSSPP 1.20.4 détecté et lancement du projet actif C++ ou Lua.

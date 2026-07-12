@@ -37,6 +37,8 @@ volontairement distinct du logo personnel ApeXploit.
 - projets Lua avec catalogue LuaPlayer HM et LuaPlayer Plus ;
 - LuaPlayer Plus r163 embarqué et exécutable ;
 - éditeur Monaco C++/Lua entièrement local ;
+- explorateur multi-fichiers avec création, ouverture, renommage et suppression ;
+- arborescence confinée au projet avec protection des fichiers indispensables ;
 - compilation d'un véritable `EBOOT.PBP` MIPS ;
 - lancement direct dans PPSSPP ;
 - installation confinée à `PSP/GAME/<projet>` ;

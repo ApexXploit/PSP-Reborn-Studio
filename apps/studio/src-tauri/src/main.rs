@@ -3,13 +3,15 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     fs::File,
-    io::Read,
-    path::{Path, PathBuf},
+    io::{Read, Write},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 use tauri::Manager;
 
 const MAX_SOURCE_SIZE: usize = 2_000_000;
+const MAX_TREE_ENTRIES: usize = 1_000;
+const MAX_TREE_DEPTH: usize = 12;
 const CONFIG_NAME: &str = "psp-project.json";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -29,6 +31,16 @@ struct EnvironmentStatus {
     pspdev_ready: bool,
     pspdev_version: Option<String>,
     ppsspp_ready: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectFileEntry {
+    path: String,
+    name: String,
+    is_dir: bool,
+    depth: usize,
+    read_only: bool,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -99,9 +111,208 @@ fn require_safe_project(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, S
     Ok(directory)
 }
 
+fn safe_relative_path(value: &str, allow_empty: bool) -> Result<PathBuf, String> {
+    if value.is_empty() && allow_empty {
+        return Ok(PathBuf::new());
+    }
+    if value.is_empty() || value.len() > 240 {
+        return Err("Chemin de projet invalide".into());
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err("Les chemins absolus sont interdits".into());
+    }
+    let mut safe = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => safe.push(part),
+            _ => return Err("Le chemin ne peut pas sortir du projet".into()),
+        }
+    }
+    if safe.as_os_str().is_empty() && !allow_empty {
+        return Err("Chemin de projet invalide".into());
+    }
+    Ok(safe)
+}
+
+fn valid_item_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 80
+        && name != "."
+        && name != ".."
+        && !name.starts_with('.')
+        && !name
+            .chars()
+            .any(|character| character.is_control() || "/\\:".contains(character))
+}
+
+fn editable_project_file(path: &Path) -> bool {
+    if path.file_name().is_some_and(|name| name == "Makefile") {
+        return true;
+    }
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "c" | "cc"
+                    | "cpp"
+                    | "h"
+                    | "hpp"
+                    | "lua"
+                    | "json"
+                    | "txt"
+                    | "md"
+                    | "ini"
+                    | "xml"
+                    | "csv"
+                    | "vert"
+                    | "frag"
+                    | "obj"
+                    | "mtl"
+            )
+        })
+}
+
+fn writable_project_file(path: &Path) -> bool {
+    editable_project_file(path)
+        && path.file_name().is_none_or(|name| name != "Makefile")
+        && path != Path::new(CONFIG_NAME)
+}
+
+fn protected_project_path(path: &Path) -> bool {
+    matches!(
+        path.to_string_lossy().replace('\\', "/").as_str(),
+        CONFIG_NAME | "Makefile" | "script.lua" | "src" | "src/main.cpp" | "assets"
+    )
+}
+
+fn hidden_project_item(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            CONFIG_NAME
+                | "EBOOT.PBP"
+                | "PARAM.SFO"
+                | "game.elf"
+                | "Support.prx"
+                | "License.txt"
+                | "lpp.ini"
+        )
+        || name.ends_with(".o")
+}
+
+fn require_existing_project_path(
+    directory: &Path,
+    relative: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let relative = safe_relative_path(relative, false)?;
+    let candidate = directory.join(&relative);
+    let metadata =
+        fs::symlink_metadata(&candidate).map_err(|_| "Élément introuvable".to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Les liens symboliques sont interdits".into());
+    }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|_| "Élément introuvable".to_string())?;
+    if !canonical.starts_with(directory) || canonical == directory {
+        return Err("Le chemin sort du projet".into());
+    }
+    Ok((relative, canonical))
+}
+
+fn collect_project_files(
+    directory: &Path,
+    current: &Path,
+    depth: usize,
+    entries: &mut Vec<ProjectFileEntry>,
+) -> Result<(), String> {
+    if depth > MAX_TREE_DEPTH {
+        return Err("L’arborescence dépasse la profondeur autorisée".into());
+    }
+    let mut children = fs::read_dir(current)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    children.sort_by_key(|entry| {
+        let is_file = entry.file_type().map(|kind| kind.is_file()).unwrap_or(true);
+        (is_file, entry.file_name().to_string_lossy().to_lowercase())
+    });
+    for entry in children {
+        if entries.len() >= MAX_TREE_ENTRIES {
+            return Err("Le projet contient trop d’éléments à afficher".into());
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if hidden_project_item(&name) {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_symlink() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(directory)
+            .map_err(|_| "Chemin de projet invalide".to_string())?
+            .to_path_buf();
+        if kind.is_dir() {
+            entries.push(ProjectFileEntry {
+                path: relative.to_string_lossy().replace('\\', "/"),
+                name,
+                is_dir: true,
+                depth,
+                read_only: false,
+            });
+            collect_project_files(directory, &entry.path(), depth + 1, entries)?;
+        } else if kind.is_file() && editable_project_file(&relative) {
+            entries.push(ProjectFileEntry {
+                path: relative.to_string_lossy().replace('\\', "/"),
+                name,
+                is_dir: false,
+                depth,
+                read_only: !writable_project_file(&relative),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn require_no_symlinks(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Les liens symboliques sont interdits".into());
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+            require_no_symlinks(&entry.map_err(|error| error.to_string())?.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, contents).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "Nom de fichier invalide".to_string())?
+        .to_string_lossy();
+    let temporary = path.with_file_name(format!(
+        ".{file_name}.{}.psp-reborn-writing",
+        std::process::id()
+    ));
+    let mut temporary_file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| "Une autre sauvegarde est déjà en cours".to_string())?;
+    temporary_file
+        .write_all(contents)
+        .and_then(|_| temporary_file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            error.to_string()
+        })?;
+    drop(temporary_file);
     fs::rename(&temporary, path).map_err(|error| {
         let _ = fs::remove_file(&temporary);
         error.to_string()
@@ -455,6 +666,154 @@ fn save_main_source(app: tauri::AppHandle, project: String, source: String) -> R
 }
 
 #[tauri::command]
+fn list_project_files(
+    app: tauri::AppHandle,
+    project: String,
+) -> Result<Vec<ProjectFileEntry>, String> {
+    let directory = require_safe_project(&app, &project)?;
+    let mut entries = Vec::new();
+    collect_project_files(&directory, &directory, 0, &mut entries)?;
+    Ok(entries)
+}
+
+#[tauri::command]
+fn read_project_file(
+    app: tauri::AppHandle,
+    project: String,
+    path: String,
+) -> Result<String, String> {
+    let directory = require_safe_project(&app, &project)?;
+    let (relative, file) = require_existing_project_path(&directory, &path)?;
+    if !file.is_file() || !editable_project_file(&relative) || relative == Path::new(CONFIG_NAME) {
+        return Err("Ce fichier ne peut pas être ouvert dans l’éditeur".into());
+    }
+    if fs::metadata(&file)
+        .map_err(|error| error.to_string())?
+        .len()
+        > MAX_SOURCE_SIZE as u64
+    {
+        return Err("Fichier trop volumineux".into());
+    }
+    fs::read_to_string(file).map_err(|_| "Le fichier n’est pas un texte UTF-8 valide".into())
+}
+
+#[tauri::command]
+fn save_project_file(
+    app: tauri::AppHandle,
+    project: String,
+    path: String,
+    source: String,
+) -> Result<(), String> {
+    if source.len() > MAX_SOURCE_SIZE {
+        return Err("Fichier trop volumineux".into());
+    }
+    let directory = require_safe_project(&app, &project)?;
+    let (relative, file) = require_existing_project_path(&directory, &path)?;
+    if !file.is_file() || !writable_project_file(&relative) {
+        return Err("Ce fichier n’est pas modifiable".into());
+    }
+    write_atomic(&file, source.as_bytes())
+}
+
+#[tauri::command]
+fn create_project_item(
+    app: tauri::AppHandle,
+    project: String,
+    parent: String,
+    name: String,
+    is_dir: bool,
+) -> Result<String, String> {
+    if !valid_item_name(&name) {
+        return Err("Nom invalide : 1 à 80 caractères, sans /, \\, : ni nom caché".into());
+    }
+    let directory = require_safe_project(&app, &project)?;
+    let parent_relative = safe_relative_path(&parent, true)?;
+    let parent_path = if parent_relative.as_os_str().is_empty() {
+        directory.clone()
+    } else {
+        let (_, path) =
+            require_existing_project_path(&directory, &parent_relative.to_string_lossy())?;
+        path
+    };
+    if !parent_path.is_dir() {
+        return Err("Le parent doit être un dossier".into());
+    }
+    let target = parent_path.join(&name);
+    if target.exists() {
+        return Err("Un élément du même nom existe déjà".into());
+    }
+    let relative = target
+        .strip_prefix(&directory)
+        .map_err(|_| "Chemin de projet invalide".to_string())?;
+    if !is_dir && !editable_project_file(relative) {
+        return Err("Extension de fichier non autorisée dans l’éditeur".into());
+    }
+    if is_dir {
+        fs::create_dir(&target).map_err(|error| error.to_string())?;
+    } else {
+        File::options()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(relative.to_string_lossy().replace('\\', "/"))
+}
+
+#[tauri::command]
+fn rename_project_item(
+    app: tauri::AppHandle,
+    project: String,
+    path: String,
+    new_name: String,
+) -> Result<String, String> {
+    if !valid_item_name(&new_name) {
+        return Err("Nouveau nom invalide".into());
+    }
+    let directory = require_safe_project(&app, &project)?;
+    let (relative, current) = require_existing_project_path(&directory, &path)?;
+    if protected_project_path(&relative) {
+        return Err("Cet élément est requis par le projet et ne peut pas être renommé".into());
+    }
+    let destination = current
+        .parent()
+        .ok_or_else(|| "Chemin invalide".to_string())?
+        .join(&new_name);
+    if destination.exists() {
+        return Err("Un élément du même nom existe déjà".into());
+    }
+    if current.is_file() {
+        let destination_relative = destination
+            .strip_prefix(&directory)
+            .map_err(|_| "Chemin invalide".to_string())?;
+        if !editable_project_file(destination_relative) {
+            return Err("Extension de fichier non autorisée".into());
+        }
+    }
+    fs::rename(&current, &destination).map_err(|error| error.to_string())?;
+    Ok(destination
+        .strip_prefix(&directory)
+        .map_err(|_| "Chemin invalide".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
+#[tauri::command]
+fn delete_project_item(app: tauri::AppHandle, project: String, path: String) -> Result<(), String> {
+    let directory = require_safe_project(&app, &project)?;
+    let (relative, target) = require_existing_project_path(&directory, &path)?;
+    if protected_project_path(&relative) {
+        return Err("Cet élément est requis par le projet et ne peut pas être supprimé".into());
+    }
+    require_no_symlinks(&target)?;
+    if target.is_dir() {
+        fs::remove_dir_all(target).map_err(|error| error.to_string())
+    } else {
+        fs::remove_file(target).map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
 fn build_project(app: tauri::AppHandle, project: String) -> Result<String, String> {
     let directory = require_safe_project(&app, &project)?;
     let config: Project = serde_json::from_str(
@@ -590,6 +949,12 @@ fn main() {
             create_project,
             read_main_source,
             save_main_source,
+            list_project_files,
+            read_project_file,
+            save_project_file,
+            create_project_item,
+            rename_project_item,
+            delete_project_item,
             build_project,
             run_project_ppsspp,
             deploy_project
@@ -611,6 +976,71 @@ mod tests {
             assert!(!valid_name(invalid), "{invalid} should be rejected");
         }
         assert!(!valid_name(&"a".repeat(33)));
+    }
+
+    #[test]
+    fn project_file_paths_cannot_escape_the_project() {
+        for valid in ["src/main.cpp", "assets/maps/level1.json", "notes.txt"] {
+            assert!(safe_relative_path(valid, false).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "../secret",
+            "src/../../secret",
+            "/tmp/secret",
+            "./source.lua",
+        ] {
+            assert!(safe_relative_path(invalid, false).is_err(), "{invalid}");
+        }
+        assert!(safe_relative_path("", true).is_ok());
+    }
+
+    #[test]
+    fn file_manager_protects_required_project_files() {
+        for protected in [
+            CONFIG_NAME,
+            "Makefile",
+            "script.lua",
+            "src",
+            "src/main.cpp",
+            "assets",
+        ] {
+            assert!(protected_project_path(Path::new(protected)), "{protected}");
+        }
+        assert!(!protected_project_path(Path::new("src/player.cpp")));
+        assert!(valid_item_name("player.cpp"));
+        assert!(!valid_item_name("../player.cpp"));
+        assert!(!valid_item_name(".git"));
+        assert!(editable_project_file(Path::new("Makefile")));
+        assert!(!writable_project_file(Path::new("Makefile")));
+        assert!(writable_project_file(Path::new("src/player.cpp")));
+    }
+
+    #[test]
+    fn file_tree_hides_generated_outputs_and_lists_sources() {
+        let directory =
+            std::env::temp_dir().join(format!("psp-reborn-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(directory.join("src")).unwrap();
+        fs::create_dir_all(directory.join("assets")).unwrap();
+        fs::write(directory.join("src/main.cpp"), "int main() {}").unwrap();
+        fs::write(directory.join("notes.md"), "# Notes").unwrap();
+        fs::write(directory.join("EBOOT.PBP"), "generated").unwrap();
+        fs::write(directory.join(CONFIG_NAME), "{}").unwrap();
+        let canonical = directory.canonicalize().unwrap();
+        let mut entries = Vec::new();
+        collect_project_files(&canonical, &canonical, 0, &mut entries).unwrap();
+        let paths = entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"src"));
+        assert!(paths.contains(&"src/main.cpp"));
+        assert!(paths.contains(&"notes.md"));
+        assert!(!paths.contains(&"EBOOT.PBP"));
+        assert!(!paths.contains(&CONFIG_NAME));
+        assert!(require_existing_project_path(&canonical, "../secret").is_err());
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
