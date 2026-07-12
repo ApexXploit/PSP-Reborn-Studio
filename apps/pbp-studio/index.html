@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>PSP Reborn — PBP Studio</title><link rel="stylesheet" href="style.css"></head>
+<body>
+  <header><div><small>PSP REBORN STUDIO</small><h1>PBP Unpacker</h1><p>Inspecter, extraire et reconstruire un EBOOT.PBP.</p></div></header>
+  <main>
+    <nav><button id="open" class="primary">Ouvrir un PBP</button><button id="new">Nouveau</button><button id="extract-all">Tout extraire</button><button id="save" class="primary">Construire EBOOT.PBP</button></nav>
+    <p id="status" role="status">Aucun fichier ouvert.</p>
+    <div class="layout"><section><table><thead><tr><th>Section</th><th>Taille</th><th>Actions</th></tr></thead><tbody id="sections"></tbody></table></section><aside><h2>Aperçu</h2><div id="preview">Sélectionnez une section.</div></aside></div>
+  </main>
+  <script type="module" src="app.js"></script>
+</body></html>

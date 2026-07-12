@@ -1,0 +1,11 @@
+LuaPlayer HM7 RC1 Windows
+Filename: setup-luaplayer_1232308224.exe
+Reported size: 35.67 MB
+Historical URL: https://dls.pspgen.com/S/setup-luaplayer_1232308224.exe
+Installer password reported by PSPGen: global
+Status on 2026-07-13: origin host timed out; file not recovered
+
+LuaPlayerHM v3 source
+Publication: 2009-09-18 by homemister91
+Status on 2026-07-13: original QJ/PSPGen download not yet recovered as a
+standalone archive; related HM-derived source is present in the collected repos.

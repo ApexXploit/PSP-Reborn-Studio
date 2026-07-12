@@ -1,0 +1,7 @@
+{
+  "name": "LuaDemo",
+  "language": "lua",
+  "template": "hello",
+  "runtimeVersion": "lpp-r163",
+  "kernelMode": false
+}

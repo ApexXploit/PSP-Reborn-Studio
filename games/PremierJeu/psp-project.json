@@ -1,0 +1,6 @@
+{
+  "name": "PremierJeu",
+  "deployFolder": "PremierJeu",
+  "language": "cpp",
+  "firmware": "custom"
+}

@@ -1,0 +1,26 @@
+# LuaPlayer by YuliaTeam
+
+### [Документация](https://luaplayeryt.ru/)
+
+## Где скачать готовый EBOOT.PBP?
+### Способ 1: Стабильная версия
+Скачивается во вкладке [Releases](https://github.com/antim0118/LuaPlayer-by-YuliaTeam/releases).
+### Способ 2: Версия автосборщика из исходников
+В репозитории работает автосборщик, который собирает актуальную версию из последнего кода.
+В ней может быть больше исправлений багов, добавлено фич, но также могут быть и нестабильности.
+
+Для скачивания:
+1. Перейдите во вкладку [Actions для ветки main](https://github.com/antim0118/LuaPlayer-by-YuliaTeam/actions?query=is%3Asuccess+branch%3Amain).
+2. Выберите самую *позднюю* сборку (чем выше - тем новее).
+3. В разделе *Artifacts* скачайте **EBOOT.PBP**.
+
+## Как собрать из исходников?
+1. Установите PSPSDK как [указано в инструкции](https://pspdev.github.io/installation.html).
+2. Склонируйте в целевую папку репозиторий при помощи команды:
+```bash
+git clone https://github.com/antim0118/LuaPlayer-by-YuliaTeam
+```
+3. Откройте в терминале папку репозитория и запустите сборку:
+```bash
+make clean && make
+```

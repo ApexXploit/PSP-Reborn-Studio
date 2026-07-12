@@ -1,0 +1,10 @@
+{
+  "name": "psp-reborn-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "psp": "node tools/psp-reborn.mjs",
+    "doctor": "node tools/psp-reborn.mjs doctor",
+    "test": "node apps/pbp-studio/pbp.test.mjs"
+  }
+}

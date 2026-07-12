@@ -1,0 +1,6 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "deployFolder": "{{PROJECT_NAME}}",
+  "language": "cpp",
+  "firmware": "custom"
+}

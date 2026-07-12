@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Fenêtre principale sans accès shell, HTTP ou système de fichiers générique.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}
