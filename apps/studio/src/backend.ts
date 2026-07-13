@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LanguageId } from "./projectCatalog";
 
 export type Project = { name: string; language: LanguageId; template: string; runtimeVersion?: string; kernelMode: false };
-export type EnvironmentStatus = { pspdevReady: boolean; pspdevVersion?: string; ppssppReady: boolean };
+export type EnvironmentCheck = { id: string; label: string; ready: boolean; required: boolean; detail: string; path?: string };
+export type EnvironmentStatus = { pspdevReady: boolean; pspdevVersion?: string; ppssppReady: boolean; pspMounts: string[]; checks: EnvironmentCheck[] };
+export type BuildDiagnostic = { severity: "error" | "warning" | "note"; file: string; line: number; column: number; message: string };
+export type BuildReport = { success: boolean; summary: string; output: string; diagnostics: BuildDiagnostic[]; sourceCount: number };
 export type ProjectFileEntry = { path: string; name: string; isDir: boolean; depth: number; readOnly: boolean };
 const inTauri = "__TAURI_INTERNALS__" in window;
 const demoProjects = new Map<string, string>();
@@ -17,7 +20,12 @@ export async function listProjects(): Promise<Project[]> {
 export async function getEnvironmentStatus(): Promise<EnvironmentStatus> {
   return inTauri
     ? invoke("environment_status")
-    : { pspdevReady: true, pspdevVersion: "Mode aperçu", ppssppReady: false };
+    : { pspdevReady: true, pspdevVersion: "Mode aperçu", ppssppReady: false, pspMounts: [], checks: [
+      { id: "pspdev", label: "PSPDEV", ready: true, required: true, detail: "Toolchain simulée pour l’aperçu" },
+      { id: "make", label: "Moteur de build", ready: true, required: true, detail: "Make disponible" },
+      { id: "ppsspp", label: "PPSSPP", ready: false, required: false, detail: "Application native requise" },
+      { id: "psp", label: "PSP USB", ready: false, required: false, detail: "Aucun volume détecté" },
+    ] };
 }
 export async function createProject(name: string, language: LanguageId, template: string, runtimeVersion?: string): Promise<Project> {
   if (inTauri) return invoke("create_project", { name, language, template, runtimeVersion });
@@ -81,6 +89,9 @@ export async function deleteProjectItem(project: string, path: string): Promise<
   const files = demoFiles.get(project)!;
   for (const key of [...files.keys()]) if (key === path || key.startsWith(`${path}/`)) files.delete(key);
 }
-export async function buildProject(project: string): Promise<string> { return invoke("build_project", { project }); }
+export async function buildProject(project: string): Promise<BuildReport> {
+  if (inTauri) return invoke("build_project", { project });
+  return { success: true, summary: "EBOOT.PBP prêt · aperçu", output: "Compilation simulée dans le navigateur.", diagnostics: [], sourceCount: 1 };
+}
 export async function runInPpsspp(project: string): Promise<string> { return invoke("run_project_ppsspp", { project }); }
 export async function deployProject(project: string, pspRoot: string, overwrite: boolean): Promise<string> { return invoke("deploy_project", { project, pspRoot, overwrite }); }

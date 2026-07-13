@@ -20,6 +20,12 @@ Dernière mise à jour : 13 juillet 2026.
 - Explorateur de projet multi-fichiers : dossiers repliables, création,
   ouverture, renommage et suppression avec confinement et fichiers requis
   protégés.
+- Projets C/C++ multifichiers : les sources validées sous `src` sont détectées
+  récursivement et intégrées à un Makefile régénéré par l'IDE.
+- Console de compilation avec journal borné, erreurs et avertissements
+  cliquables ouvrant le fichier à la ligne correspondante.
+- Page Environnement : diagnostic de PSPDEV, Make et PPSSPP, plus détection des
+  volumes USB contenant `PSP/GAME`.
 - PSPDEV officiel v20260701 avec GCC PSP 15.2.0.
 - Compilation d'un véritable exécutable MIPS et d'un `EBOOT.PBP`.
 - PPSSPP 1.20.4 détecté et lancement du projet actif C++ ou Lua.
@@ -34,6 +40,8 @@ Les six modèles C++ sont compilés par les tests avec le véritable toolchain
 PSPDEV, puis leurs PBP sont relus et validés. Le runtime LuaPlayer Plus r163
 embarqué est lui aussi vérifié comme PBP valide. Les projets de démonstration C++
 et Lua ont démarré dans PPSSPP ; la scène Lua graphique a été contrôlée visuellement.
+La génération multifichier et la conversion des messages du compilateur en
+diagnostics navigables disposent également de tests dédiés.
 
 Empreinte SHA-256 du runtime LuaPlayer Plus r163 embarqué :
 

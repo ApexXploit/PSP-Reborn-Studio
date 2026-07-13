@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     fs::File,
     io::{Read, Write},
@@ -12,6 +13,8 @@ use tauri::Manager;
 const MAX_SOURCE_SIZE: usize = 2_000_000;
 const MAX_TREE_ENTRIES: usize = 1_000;
 const MAX_TREE_DEPTH: usize = 12;
+const MAX_BUILD_SOURCES: usize = 256;
+const MAX_BUILD_LOG: usize = 500_000;
 const CONFIG_NAME: &str = "psp-project.json";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -31,6 +34,39 @@ struct EnvironmentStatus {
     pspdev_ready: bool,
     pspdev_version: Option<String>,
     ppsspp_ready: bool,
+    psp_mounts: Vec<String>,
+    checks: Vec<EnvironmentCheck>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentCheck {
+    id: &'static str,
+    label: &'static str,
+    ready: bool,
+    required: bool,
+    detail: String,
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildDiagnostic {
+    severity: String,
+    file: String,
+    line: usize,
+    column: usize,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildReport {
+    success: bool,
+    summary: String,
+    output: String,
+    diagnostics: Vec<BuildDiagnostic>,
+    source_count: usize,
 }
 
 #[derive(Serialize)]
@@ -73,15 +109,100 @@ fn toolchain_bin(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(root.join("bin"))
 }
 
+fn ppsspp_executable() -> Option<PathBuf> {
+    [
+        "/Applications/PPSSPPSDL.app/Contents/MacOS/PPSSPPSDL",
+        "/Applications/PPSSPP.app/Contents/MacOS/PPSSPP",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file())
+}
+
+fn connected_psp_mounts() -> Vec<String> {
+    let mut mounts = Vec::new();
+    if let Ok(volumes) = fs::read_dir("/Volumes") {
+        for entry in volumes.flatten() {
+            let path = entry.path();
+            if path.join("PSP/GAME").is_dir()
+                && fs::symlink_metadata(&path)
+                    .map(|metadata| !metadata.file_type().is_symlink())
+                    .unwrap_or(false)
+            {
+                mounts.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    mounts.sort();
+    mounts
+}
+
 #[tauri::command]
 fn environment_status(app: tauri::AppHandle) -> Result<EnvironmentStatus, String> {
-    let pspdev_ready = toolchain_bin(&app).is_ok();
-    let ppsspp_ready = Path::new("/Applications/PPSSPP.app").is_dir()
-        || Path::new("/Applications/PPSSPPSDL.app").is_dir();
+    let pspdev = managed_pspdev(&app)?;
+    let compiler = pspdev.join("bin/psp-g++");
+    let config = pspdev.join("bin/psp-config");
+    let pspdev_ready = compiler.is_file() && config.is_file();
+    let ppsspp = ppsspp_executable();
+    let ppsspp_ready = ppsspp.is_some();
+    let psp_mounts = connected_psp_mounts();
+    let make = PathBuf::from("/usr/bin/make");
+    let checks = vec![
+        EnvironmentCheck {
+            id: "pspdev",
+            label: "PSPDEV",
+            ready: pspdev_ready,
+            required: true,
+            detail: if pspdev_ready {
+                "Toolchain gérée v20260701 · GCC 15.2.0".into()
+            } else {
+                "psp-g++ ou psp-config est absent".into()
+            },
+            path: Some(pspdev.to_string_lossy().to_string()),
+        },
+        EnvironmentCheck {
+            id: "make",
+            label: "Moteur de build",
+            ready: make.is_file(),
+            required: true,
+            detail: if make.is_file() {
+                "Make système disponible".into()
+            } else {
+                "Make est requis pour les projets C++".into()
+            },
+            path: Some(make.to_string_lossy().to_string()),
+        },
+        EnvironmentCheck {
+            id: "ppsspp",
+            label: "PPSSPP",
+            ready: ppsspp_ready,
+            required: false,
+            detail: if ppsspp_ready {
+                "Émulateur prêt pour les tests".into()
+            } else {
+                "Émulateur non détecté dans Applications".into()
+            },
+            path: ppsspp.map(|path| path.to_string_lossy().to_string()),
+        },
+        EnvironmentCheck {
+            id: "psp",
+            label: "PSP USB",
+            ready: !psp_mounts.is_empty(),
+            required: false,
+            detail: match psp_mounts.len() {
+                0 => "Aucun volume contenant PSP/GAME".into(),
+                1 => "Une PSP prête pour le déploiement".into(),
+                count => format!("{count} volumes PSP détectés"),
+            },
+            path: psp_mounts.first().cloned(),
+        },
+    ];
     Ok(EnvironmentStatus {
         pspdev_ready,
         pspdev_version: pspdev_ready.then(|| "v20260701 / GCC 15.2.0".into()),
         ppsspp_ready,
+        psp_mounts,
+        checks,
     })
 }
 
@@ -547,16 +668,162 @@ fn lua_source_template(template: &str) -> &'static str {
     }
 }
 
-fn makefile_template(name: &str, template: &str) -> String {
+fn makefile_for_sources(name: &str, template: &str, sources: &[PathBuf]) -> String {
     let libraries = match template {
         "graphics" => "LIBS = -lpspgu\n",
         "timer" => "LIBS = -lpsprtc\n",
         "audio" => "LIBS = -lpspaudio\n",
         _ => "",
     };
+    let objects = sources
+        .iter()
+        .map(|source| {
+            let mut object = source.clone();
+            object.set_extension("o");
+            object.to_string_lossy().replace('\\', "/")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
-        "TARGET = game\nOBJS = src/main.o\nCFLAGS = -O2 -G0 -Wall\nCXXFLAGS = $(CFLAGS) -std=c++17 -fno-exceptions -fno-rtti\nASFLAGS = $(CFLAGS)\n{libraries}EXTRA_TARGETS = EBOOT.PBP\nPSP_EBOOT_TITLE = {name}\nPSPSDK := $(shell psp-config --pspsdk-path)\ninclude $(PSPSDK)/lib/build.mak\n"
+        "# Généré par PSP Reborn Studio — les commandes utilisateur sont désactivées.\nTARGET = game\nOBJS = {objects}\nCFLAGS = -O2 -G0 -Wall -Iinclude -Isrc\nCXXFLAGS = $(CFLAGS) -std=c++17 -fno-exceptions -fno-rtti\nASFLAGS = $(CFLAGS)\n{libraries}EXTRA_TARGETS = EBOOT.PBP\nPSP_EBOOT_TITLE = {name}\nPSPSDK := $(shell psp-config --pspsdk-path)\ninclude $(PSPSDK)/lib/build.mak\n"
     )
+}
+
+fn makefile_template(name: &str, template: &str) -> String {
+    makefile_for_sources(name, template, &[PathBuf::from("src/main.cpp")])
+}
+
+fn valid_build_path(path: &Path) -> bool {
+    path.components().all(|component| match component {
+        Component::Normal(part) => {
+            let text = part.to_string_lossy();
+            !text.is_empty()
+                && !text.starts_with('.')
+                && text
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "_-.".contains(character))
+        }
+        _ => false,
+    })
+}
+
+fn collect_cpp_sources(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    fn visit(
+        root: &Path,
+        current: &Path,
+        depth: usize,
+        sources: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
+        if depth > MAX_TREE_DEPTH {
+            return Err("Les sources C++ dépassent la profondeur autorisée".into());
+        }
+        for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            if kind.is_symlink() {
+                return Err("Les liens symboliques sont interdits dans src".into());
+            }
+            if kind.is_dir() {
+                visit(root, &entry.path(), depth + 1, sources)?;
+            } else if kind.is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        matches!(extension.to_ascii_lowercase().as_str(), "c" | "cc" | "cpp")
+                    })
+            {
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|_| "Source hors du projet".to_string())?
+                    .to_path_buf();
+                if !valid_build_path(&relative) {
+                    return Err(format!(
+                        "Chemin source non compilable : {}. Utilise lettres, chiffres, _, - et .",
+                        relative.display()
+                    ));
+                }
+                sources.push(relative);
+                if sources.len() > MAX_BUILD_SOURCES {
+                    return Err(format!("Maximum {MAX_BUILD_SOURCES} sources C/C++"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let source_root = directory.join("src");
+    if !source_root.is_dir() {
+        return Err("Le dossier src requis est absent".into());
+    }
+    let mut sources = Vec::new();
+    visit(directory, &source_root, 0, &mut sources)?;
+    sources.sort();
+    if sources.is_empty() {
+        return Err("Aucun fichier C/C++ trouvé dans src".into());
+    }
+    if !sources
+        .iter()
+        .any(|source| source == Path::new("src/main.cpp"))
+    {
+        return Err("Le point d’entrée src/main.cpp est absent".into());
+    }
+    let mut objects = HashSet::new();
+    for source in &sources {
+        let mut object = source.clone();
+        object.set_extension("o");
+        if !objects.insert(object.clone()) {
+            return Err(format!(
+                "Deux sources produisent le même objet : {}",
+                object.display()
+            ));
+        }
+    }
+    Ok(sources)
+}
+
+fn truncate_build_log(mut output: String) -> String {
+    if output.len() > MAX_BUILD_LOG {
+        output.truncate(MAX_BUILD_LOG);
+        output.push_str("\n… journal tronqué par PSP Reborn Studio");
+    }
+    output
+}
+
+fn parse_build_diagnostics(output: &str, directory: &Path) -> Vec<BuildDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for text in output.lines() {
+        let parsed = ["error", "warning", "note"].iter().find_map(|severity| {
+            let marker = format!(": {severity}: ");
+            let (location, message) = text.split_once(&marker)?;
+            let mut fields = location.rsplitn(3, ':');
+            let column = fields.next()?.parse::<usize>().ok()?;
+            let line = fields.next()?.parse::<usize>().ok()?;
+            let raw_file = fields.next()?;
+            let path = Path::new(raw_file);
+            let relative = if path.is_absolute() {
+                path.strip_prefix(directory).ok()?.to_path_buf()
+            } else {
+                safe_relative_path(raw_file, false).ok()?
+            };
+            if !relative.starts_with("src") && !relative.starts_with("include") {
+                return None;
+            }
+            Some(BuildDiagnostic {
+                severity: (*severity).into(),
+                file: relative.to_string_lossy().replace('\\', "/"),
+                line,
+                column,
+                message: message.trim().to_string(),
+            })
+        });
+        if let Some(diagnostic) = parsed {
+            diagnostics.push(diagnostic);
+        }
+    }
+    diagnostics
 }
 
 fn prepare_lua_project(resources: &Path, directory: &Path, runtime: &str) -> Result<(), String> {
@@ -870,7 +1137,7 @@ fn delete_project_item(app: tauri::AppHandle, project: String, path: String) -> 
 }
 
 #[tauri::command]
-fn build_project(app: tauri::AppHandle, project: String) -> Result<String, String> {
+fn build_project(app: tauri::AppHandle, project: String) -> Result<BuildReport, String> {
     let directory = require_safe_project(&app, &project)?;
     let config: Project = serde_json::from_str(
         &fs::read_to_string(directory.join(CONFIG_NAME)).map_err(|error| error.to_string())?,
@@ -883,13 +1150,19 @@ fn build_project(app: tauri::AppHandle, project: String) -> Result<String, Strin
             .resource_dir()
             .map_err(|error| error.to_string())?;
         prepare_lua_project(&resources, &directory, runtime)?;
-        return Ok("Projet LuaPlayer Plus r163 prêt".into());
+        return Ok(BuildReport {
+            success: true,
+            summary: "Projet LuaPlayer Plus r163 prêt".into(),
+            output: "Runtime et script préparés. EBOOT.PBP validé.".into(),
+            diagnostics: Vec::new(),
+            source_count: 1,
+        });
     }
     let toolchain = toolchain_bin(&app)?;
     let pspdev = managed_pspdev(&app)?;
-    if !directory.join("Makefile").is_file() {
-        return Err("Configuration de build gérée absente".into());
-    }
+    let sources = collect_cpp_sources(&directory)?;
+    let managed_makefile = makefile_for_sources(&config.name, &config.template, &sources);
+    write_atomic(&directory.join("Makefile"), managed_makefile.as_bytes())?;
     let output = Command::new("make")
         .args(["clean", "all"])
         .current_dir(&directory)
@@ -903,18 +1176,61 @@ fn build_project(app: tauri::AppHandle, project: String) -> Result<String, Strin
         )
         .output()
         .map_err(|_| "PSPDEV n’est pas installé".to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = truncate_build_log(format!("{stdout}{stderr}"));
+    let diagnostics = parse_build_diagnostics(&log, &directory);
     if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if message.is_empty() {
-            "La compilation a échoué".into()
-        } else {
-            message
+        let error_count = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == "error")
+            .count();
+        return Ok(BuildReport {
+            success: false,
+            summary: if error_count == 0 {
+                "La compilation a échoué".into()
+            } else {
+                format!(
+                    "Compilation échouée · {error_count} erreur{}",
+                    if error_count > 1 { "s" } else { "" }
+                )
+            },
+            output: if log.trim().is_empty() {
+                "Le compilateur n’a retourné aucun détail.".into()
+            } else {
+                log
+            },
+            diagnostics,
+            source_count: sources.len(),
         });
     }
     let eboot = directory.join("EBOOT.PBP");
     validate_pbp(&eboot)
         .map_err(|error| format!("La compilation a produit un PBP invalide : {error}"))?;
-    Ok("EBOOT.PBP prêt".into())
+    let warning_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == "warning")
+        .count();
+    Ok(BuildReport {
+        success: true,
+        summary: format!(
+            "EBOOT.PBP prêt · {} source{}{}",
+            sources.len(),
+            if sources.len() > 1 { "s" } else { "" },
+            if warning_count > 0 {
+                format!(" · {warning_count} avertissement(s)")
+            } else {
+                String::new()
+            }
+        ),
+        output: if log.trim().is_empty() {
+            "Compilation terminée sans message.".into()
+        } else {
+            log
+        },
+        diagnostics,
+        source_count: sources.len(),
+    })
 }
 
 #[tauri::command]
@@ -925,10 +1241,7 @@ fn run_project_ppsspp(app: tauri::AppHandle, project: String) -> Result<String, 
         return Err("Compile le jeu avant de le tester".into());
     }
     validate_pbp(&eboot)?;
-    let executable = Path::new("/Applications/PPSSPPSDL.app/Contents/MacOS/PPSSPPSDL");
-    if !executable.is_file() {
-        return Err("PPSSPP n’est pas installé".into());
-    }
+    let executable = ppsspp_executable().ok_or_else(|| "PPSSPP n’est pas installé".to_string())?;
     Command::new(executable)
         .arg(&eboot)
         .current_dir(&directory)
@@ -1116,6 +1429,46 @@ mod tests {
     }
 
     #[test]
+    fn managed_makefile_includes_valid_recursive_sources() {
+        let directory =
+            std::env::temp_dir().join(format!("psp-reborn-multifile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(directory.join("src/game")).unwrap();
+        fs::write(directory.join("src/main.cpp"), "int main() { return 0; }").unwrap();
+        fs::write(
+            directory.join("src/game/player.cpp"),
+            "int player() { return 1; }",
+        )
+        .unwrap();
+        fs::write(directory.join("src/game/player.hpp"), "int player();").unwrap();
+        let sources = collect_cpp_sources(&directory).unwrap();
+        assert_eq!(
+            sources,
+            vec![
+                PathBuf::from("src/game/player.cpp"),
+                PathBuf::from("src/main.cpp")
+            ]
+        );
+        let makefile = makefile_for_sources("Test", "hello", &sources);
+        assert!(makefile.contains("OBJS = src/game/player.o src/main.o"));
+        assert!(makefile.contains("-Iinclude -Isrc"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn compiler_messages_become_clickable_diagnostics() {
+        let directory = PathBuf::from("/tmp/PSP Reborn/Games/Test");
+        let log =
+            "src/main.cpp:12:7: error: expected ';'\ninclude/game.hpp:4:2: warning: unused value";
+        let diagnostics = parse_build_diagnostics(log, &directory);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].severity, "error");
+        assert_eq!(diagnostics[0].file, "src/main.cpp");
+        assert_eq!(diagnostics[0].line, 12);
+        assert_eq!(diagnostics[1].file, "include/game.hpp");
+    }
+
+    #[test]
     fn project_catalog_rejects_unknown_or_mixed_choices() {
         assert!(valid_project_choice("cpp", "graphics", None));
         assert!(valid_project_choice("cpp", "audio", None));
@@ -1158,8 +1511,15 @@ mod tests {
             )
             .unwrap();
             fs::write(
+                directory.join("src/extra.cpp"),
+                "int pspRebornMultifileCheck() { return 42; }\n",
+            )
+            .unwrap();
+            let sources = collect_cpp_sources(&directory).unwrap();
+            assert_eq!(sources.len(), 2);
+            fs::write(
                 directory.join("Makefile"),
-                makefile_template("Test", template),
+                makefile_for_sources("Test", template, &sources),
             )
             .unwrap();
             let output = Command::new("make")
