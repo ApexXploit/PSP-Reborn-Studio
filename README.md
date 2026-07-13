@@ -46,7 +46,8 @@ volontairement distinct du logo personnel ApeXploit.
 - arborescence confinée au projet avec protection des fichiers indispensables ;
 - compilation d'un véritable `EBOOT.PBP` MIPS ;
 - lancement direct dans PPSSPP ;
-- installation confinée à `PSP/GAME/<projet>` ;
+- compilation puis installation confinée à `PSP/GAME/<projet>` en une action ;
+- vérification SHA-256 après copie et éjection sûre de la PSP ;
 - PBP Studio pour inspecter, extraire, modifier et reconstruire les PBP ;
 - aucun terminal ni chemin arbitraire exposé dans l'interface.
 

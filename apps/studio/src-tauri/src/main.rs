@@ -71,6 +71,30 @@ struct BuildReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DeploymentReport {
+    summary: String,
+    destination: String,
+    files: usize,
+    bytes: u64,
+    eboot_sha256: String,
+    verified: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentOutcome {
+    build: BuildReport,
+    deployment: Option<DeploymentReport>,
+}
+
+#[derive(Default)]
+struct CopyStats {
+    files: usize,
+    bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProjectFileEntry {
     path: String,
     name: String,
@@ -135,6 +159,32 @@ fn connected_psp_mounts() -> Vec<String> {
     }
     mounts.sort();
     mounts
+}
+
+fn require_psp_volume(psp_root: &str, require_mounted_volume: bool) -> Result<PathBuf, String> {
+    let requested = Path::new(psp_root);
+    if !requested.is_absolute() {
+        return Err("Le chemin de la PSP doit être absolu".into());
+    }
+    let metadata = fs::symlink_metadata(requested)
+        .map_err(|_| "Le volume PSP sélectionné est inaccessible".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Le volume PSP sélectionné n’est pas sûr".into());
+    }
+    let root = requested
+        .canonicalize()
+        .map_err(|_| "Le volume PSP sélectionné est inaccessible".to_string())?;
+    if require_mounted_volume && root.parent() != Some(Path::new("/Volumes")) {
+        return Err("L’éjection est limitée aux volumes montés directement dans /Volumes".into());
+    }
+    let game = root
+        .join("PSP/GAME")
+        .canonicalize()
+        .map_err(|_| "Le volume sélectionné ne contient pas PSP/GAME".to_string())?;
+    if !game.is_dir() || !game.starts_with(&root) || game == root {
+        return Err("Le volume sélectionné ne contient pas un dossier PSP/GAME sûr".into());
+    }
+    Ok(root)
 }
 
 #[tauri::command]
@@ -478,7 +528,14 @@ fn sha256(path: &Path) -> Result<[u8; 32], String> {
     Ok(digest.finalize().into())
 }
 
-fn copy_verified(source: &Path, destination: &Path, overwrite: bool) -> Result<(), String> {
+fn sha256_hex(path: &Path) -> Result<String, String> {
+    Ok(sha256(path)?
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn copy_verified(source: &Path, destination: &Path, overwrite: bool) -> Result<u64, String> {
     if destination.exists() && !overwrite {
         return Err(format!(
             "{} existe déjà. Confirme son remplacement.",
@@ -489,6 +546,12 @@ fn copy_verified(source: &Path, destination: &Path, overwrite: bool) -> Result<(
         ));
     }
     let temporary = destination.with_extension("copying");
+    if let Ok(metadata) = fs::symlink_metadata(&temporary) {
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            return Err("Un dossier temporaire inattendu bloque la copie PSP".into());
+        }
+        fs::remove_file(&temporary).map_err(|error| error.to_string())?;
+    }
     fs::copy(source, &temporary).map_err(|error| error.to_string())?;
     if sha256(source)? != sha256(&temporary)? {
         let _ = fs::remove_file(&temporary);
@@ -497,14 +560,23 @@ fn copy_verified(source: &Path, destination: &Path, overwrite: bool) -> Result<(
     if destination.exists() {
         fs::remove_file(destination).map_err(|error| error.to_string())?;
     }
-    fs::rename(&temporary, destination).map_err(|error| error.to_string())
+    fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
+    fs::metadata(destination)
+        .map(|metadata| metadata.len())
+        .map_err(|error| error.to_string())
 }
 
-fn copy_safe_tree(source: &Path, destination: &Path, overwrite: bool) -> Result<(), String> {
+fn copy_safe_tree(source: &Path, destination: &Path, overwrite: bool) -> Result<CopyStats, String> {
     if !source.exists() {
-        return Ok(());
+        return Ok(CopyStats::default());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(destination) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("La destination des ressources PSP n’est pas sûre".into());
+        }
     }
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    let mut stats = CopyStats::default();
     for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let kind = entry.file_type().map_err(|error| error.to_string())?;
@@ -513,12 +585,15 @@ fn copy_safe_tree(source: &Path, destination: &Path, overwrite: bool) -> Result<
         }
         let target = destination.join(entry.file_name());
         if kind.is_dir() {
-            copy_safe_tree(&entry.path(), &target, overwrite)?;
+            let child = copy_safe_tree(&entry.path(), &target, overwrite)?;
+            stats.files += child.files;
+            stats.bytes += child.bytes;
         } else if kind.is_file() {
-            copy_verified(&entry.path(), &target, overwrite)?;
+            stats.bytes += copy_verified(&entry.path(), &target, overwrite)?;
+            stats.files += 1;
         }
     }
-    Ok(())
+    Ok(stats)
 }
 
 fn valid_project_choice(language: &str, template: &str, runtime: Option<&str>) -> bool {
@@ -1256,20 +1331,22 @@ fn deploy_project(
     project: String,
     psp_root: String,
     overwrite: bool,
-) -> Result<String, String> {
+) -> Result<DeploymentOutcome, String> {
+    let build = build_project(app.clone(), project.clone())?;
+    if !build.success {
+        return Ok(DeploymentOutcome {
+            build,
+            deployment: None,
+        });
+    }
     let project_directory = require_safe_project(&app, &project)?;
     let source = project_directory.join("EBOOT.PBP");
-    if !source.is_file() {
-        return Err("Compile le jeu avant de l’installer".into());
-    }
     validate_pbp(&source)?;
-    let game = Path::new(&psp_root).join("PSP").join("GAME");
-    let game = game
+    let volume = require_psp_volume(&psp_root, false)?;
+    let game = volume
+        .join("PSP/GAME")
         .canonicalize()
         .map_err(|_| "Le volume sélectionné ne contient pas PSP/GAME".to_string())?;
-    if !game.is_dir() {
-        return Err("Le volume sélectionné ne contient pas PSP/GAME".into());
-    }
     let destination = game.join(&project);
     if destination.exists() {
         let canonical = destination
@@ -1286,7 +1363,10 @@ fn deploy_project(
     } else {
         fs::create_dir(&destination).map_err(|error| error.to_string())?;
     }
-    copy_verified(&source, &destination.join("EBOOT.PBP"), overwrite)?;
+    let mut stats = CopyStats {
+        files: 1,
+        bytes: copy_verified(&source, &destination.join("EBOOT.PBP"), overwrite)?,
+    };
     let config: Project = serde_json::from_str(
         &fs::read_to_string(project_directory.join(CONFIG_NAME))
             .map_err(|error| error.to_string())?,
@@ -1294,19 +1374,60 @@ fn deploy_project(
     .map_err(|error| error.to_string())?;
     if config.language == "lua" {
         for file in ["script.lua", "lpp.ini"] {
-            copy_verified(
+            stats.bytes += copy_verified(
                 &project_directory.join(file),
                 &destination.join(file),
                 overwrite,
             )?;
+            stats.files += 1;
         }
     }
-    copy_safe_tree(
+    let assets = copy_safe_tree(
         &project_directory.join("assets"),
         &destination.join("assets"),
         overwrite,
     )?;
-    Ok(format!("Installé dans PSP/GAME/{project}"))
+    stats.files += assets.files;
+    stats.bytes += assets.bytes;
+    let deployed_eboot = destination.join("EBOOT.PBP");
+    if sha256(&source)? != sha256(&deployed_eboot)? {
+        return Err("La vérification finale de l’EBOOT installé a échoué".into());
+    }
+    let eboot_sha256 = sha256_hex(&deployed_eboot)?;
+    Ok(DeploymentOutcome {
+        build,
+        deployment: Some(DeploymentReport {
+            summary: format!("Installé et vérifié dans PSP/GAME/{project}"),
+            destination: destination.to_string_lossy().to_string(),
+            files: stats.files,
+            bytes: stats.bytes,
+            eboot_sha256,
+            verified: true,
+        }),
+    })
+}
+
+#[tauri::command]
+fn eject_psp(psp_root: String) -> Result<String, String> {
+    let volume = require_psp_volume(&psp_root, true)?;
+    let diskutil = Path::new("/usr/sbin/diskutil");
+    if !diskutil.is_file() {
+        return Err("L’éjection sûre n’est pas disponible sur ce système".into());
+    }
+    let output = Command::new(diskutil)
+        .arg("eject")
+        .arg(&volume)
+        .output()
+        .map_err(|error| format!("Impossible de demander l’éjection : {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "macOS a refusé l’éjection de la PSP".into()
+        } else {
+            format!("Éjection refusée : {detail}")
+        });
+    }
+    Ok("PSP éjectée en toute sécurité".into())
 }
 
 fn main() {
@@ -1326,7 +1447,8 @@ fn main() {
             delete_project_item,
             build_project,
             run_project_ppsspp,
-            deploy_project
+            deploy_project,
+            eject_psp
         ])
         .run(tauri::generate_context!())
         .expect("Tauri failed")
@@ -1466,6 +1588,41 @@ mod tests {
         assert_eq!(diagnostics[0].file, "src/main.cpp");
         assert_eq!(diagnostics[0].line, 12);
         assert_eq!(diagnostics[1].file, "include/game.hpp");
+    }
+
+    #[test]
+    fn psp_volume_requires_a_confined_game_directory() {
+        let volume = std::env::temp_dir().join(format!("psp-reborn-volume-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&volume);
+        fs::create_dir_all(volume.join("PSP/GAME")).unwrap();
+        let validated = require_psp_volume(&volume.to_string_lossy(), false).unwrap();
+        assert_eq!(validated, volume.canonicalize().unwrap());
+        assert!(require_psp_volume(&volume.to_string_lossy(), true).is_err());
+        fs::remove_dir_all(volume.join("PSP")).unwrap();
+        assert!(require_psp_volume(&volume.to_string_lossy(), false).is_err());
+        let _ = fs::remove_dir_all(volume);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_copy_replaces_a_temporary_symlink_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let directory =
+            std::env::temp_dir().join(format!("psp-reborn-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.pbp");
+        let destination = directory.join("EBOOT.PBP");
+        let temporary = directory.join("EBOOT.copying");
+        let victim = directory.join("outside.txt");
+        fs::write(&source, b"safe eboot").unwrap();
+        fs::write(&victim, b"do not touch").unwrap();
+        symlink(&victim, &temporary).unwrap();
+        assert_eq!(copy_verified(&source, &destination, true).unwrap(), 10);
+        assert_eq!(fs::read(&destination).unwrap(), b"safe eboot");
+        assert_eq!(fs::read(&victim).unwrap(), b"do not touch");
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

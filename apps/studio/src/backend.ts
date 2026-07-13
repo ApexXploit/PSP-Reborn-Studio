@@ -7,6 +7,8 @@ export type EnvironmentCheck = { id: string; label: string; ready: boolean; requ
 export type EnvironmentStatus = { pspdevReady: boolean; pspdevVersion?: string; ppssppReady: boolean; pspMounts: string[]; checks: EnvironmentCheck[] };
 export type BuildDiagnostic = { severity: "error" | "warning" | "note"; file: string; line: number; column: number; message: string };
 export type BuildReport = { success: boolean; summary: string; output: string; diagnostics: BuildDiagnostic[]; sourceCount: number };
+export type DeploymentReport = { summary: string; destination: string; files: number; bytes: number; ebootSha256: string; verified: boolean };
+export type DeploymentOutcome = { build: BuildReport; deployment: DeploymentReport | null };
 export type ProjectFileEntry = { path: string; name: string; isDir: boolean; depth: number; readOnly: boolean };
 const inTauri = "__TAURI_INTERNALS__" in window;
 const demoProjects = new Map<string, string>();
@@ -94,4 +96,12 @@ export async function buildProject(project: string): Promise<BuildReport> {
   return { success: true, summary: "EBOOT.PBP prêt · aperçu", output: "Compilation simulée dans le navigateur.", diagnostics: [], sourceCount: 1 };
 }
 export async function runInPpsspp(project: string): Promise<string> { return invoke("run_project_ppsspp", { project }); }
-export async function deployProject(project: string, pspRoot: string, overwrite: boolean): Promise<string> { return invoke("deploy_project", { project, pspRoot, overwrite }); }
+export async function deployProject(project: string, pspRoot: string, overwrite: boolean): Promise<DeploymentOutcome> {
+  if (inTauri) return invoke("deploy_project", { project, pspRoot, overwrite });
+  const build = await buildProject(project);
+  return { build, deployment: { summary: `Installation simulée de ${project}`, destination: `${pspRoot}/PSP/GAME/${project}`, files: 1, bytes: 4096, ebootSha256: "aperçu", verified: true } };
+}
+export async function ejectPsp(pspRoot: string): Promise<string> {
+  if (inTauri) return invoke("eject_psp", { pspRoot });
+  return "Éjection simulée dans l’aperçu";
+}

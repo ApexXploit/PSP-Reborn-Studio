@@ -85,13 +85,16 @@ header .environment:hover{background:#192333}
 header .environment span{margin:0}
 .deploy-bar{min-height:36px}
 .deploy-bar .console-toggle{margin-left:auto}
-.build-console{display:grid;grid-template-rows:auto auto minmax(38px,1fr);min-height:0;border-top:1px solid #263047;padding-top:7px;overflow:hidden}
+.build-console{display:flex;min-height:0;flex-direction:column;border-top:1px solid #263047;padding-top:7px;overflow:hidden}
 .console-title{display:flex;align-items:center;gap:10px;font-size:12px}
 .console-title span{color:#94a1b7}
 .console-title span.success{color:#82e864}
 .console-title span.failure{color:#ff817b}
 .console-title small{margin-left:auto;color:#68758b}
-.build-console pre{min-height:0;margin:6px 0 0;overflow:auto;white-space:pre-wrap;color:#aebbd0;font:11px/1.4 "SFMono-Regular",Consolas,monospace}
+.build-console pre{flex:1;min-height:0;margin:6px 0 0;overflow:auto;white-space:pre-wrap;color:#aebbd0;font:11px/1.4 "SFMono-Regular",Consolas,monospace}
+.deployment-result{display:flex;align-items:center;gap:12px;margin-top:6px;padding:6px 8px;border:1px solid #315a31;background:#142319;border-radius:5px;color:#a9ef94;font-size:10px}
+.deployment-result span{color:#aebbd0}
+.deployment-result code{margin-left:auto;color:#73cb59}
 .diagnostic-list{display:flex;gap:6px;margin-top:6px;overflow:auto}
 .diagnostic-list button{display:grid;grid-template-columns:auto auto minmax(160px,1fr);gap:7px;align-items:center;min-width:max-content;padding:5px 8px;border-radius:5px;font-size:10px}
 .diagnostic-list button.error{border-color:#7f3434;background:#321b20}

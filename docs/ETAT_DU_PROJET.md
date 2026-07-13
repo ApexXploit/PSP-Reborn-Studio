@@ -29,8 +29,10 @@ Dernière mise à jour : 13 juillet 2026.
 - PSPDEV officiel v20260701 avec GCC PSP 15.2.0.
 - Compilation d'un véritable exécutable MIPS et d'un `EBOOT.PBP`.
 - PPSSPP 1.20.4 détecté et lancement du projet actif C++ ou Lua.
-- Déploiement limité à `PSP/GAME/<projet>`.
-- Sélection native du volume PSP.
+- Déploiement limité à `PSP/GAME/<projet>`, précédé automatiquement d'une
+  compilation fraîche et suivi d'une vérification SHA-256 de l'EBOOT copié.
+- Sélection native du volume PSP, rapport du nombre d'octets/fichiers copiés et
+  éjection sûre limitée aux volumes PSP montés directement dans `/Volumes`.
 - PBP Studio intégré : ouverture, extraction, remplacement et reconstruction.
 - Audit npm sans vulnérabilité connue.
 

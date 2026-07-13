@@ -6,7 +6,7 @@ import Help from "./Help";
 import PbpStudio from "./PbpStudio";
 import { open } from "@tauri-apps/plugin-dialog";
 import { languages, luaRuntimes, runtimeStatusLabel, templates, type LanguageId } from "./projectCatalog";
-import { buildProject, createProject, createProjectItem, deleteProjectItem, deployProject, getEnvironmentStatus, listProjectFiles, listProjects, readProjectFile, renameProjectItem, runInPpsspp, saveProjectFile, type BuildDiagnostic, type BuildReport, type EnvironmentStatus, type Project, type ProjectFileEntry } from "./backend";
+import { buildProject, createProject, createProjectItem, deleteProjectItem, deployProject, ejectPsp, getEnvironmentStatus, listProjectFiles, listProjects, readProjectFile, renameProjectItem, runInPpsspp, saveProjectFile, type BuildDiagnostic, type BuildReport, type DeploymentReport, type EnvironmentStatus, type Project, type ProjectFileEntry } from "./backend";
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -29,6 +29,7 @@ export default function App() {
   const [environment, setEnvironment] = useState<EnvironmentStatus>();
   const [environmentRefreshing, setEnvironmentRefreshing] = useState(false);
   const [buildReport, setBuildReport] = useState<BuildReport>();
+  const [deploymentReport, setDeploymentReport] = useState<DeploymentReport>();
   const [consoleOpen, setConsoleOpen] = useState(true);
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const pendingPosition = useRef<{ lineNumber: number; column: number } | undefined>(undefined);
@@ -76,9 +77,25 @@ export default function App() {
       if (selected) setPspRoot(selected);
     } catch { setStatus("Le sélecteur de volume est disponible dans l’application native."); }
   };
-  const installOnPsp = () => {
+  const installOnPsp = async () => {
     const overwrite = confirm(`Installer ${active} sur la PSP ? Un ancien EBOOT du même projet sera remplacé.`);
-    if (overwrite) action("Installation", () => deployProject(active, pspRoot, true));
+    if (!overwrite) return;
+    setStatus("Compilation et installation…"); setConsoleOpen(true); setBuildReport(undefined); setDeploymentReport(undefined);
+    try {
+      if (dirty) { await saveProjectFile(active, activeFile, source); setDirty(false); }
+      const outcome = await deployProject(active, pspRoot, true);
+      setBuildReport(outcome.build);
+      setDeploymentReport(outcome.deployment ?? undefined);
+      setStatus(outcome.deployment?.summary ?? outcome.build.summary);
+    } catch (error) { setStatus(`Erreur : ${error instanceof Error ? error.message : error}`); }
+  };
+  const safelyEjectPsp = async () => {
+    if (!confirm("Éjecter cette PSP ? Attends la confirmation avant de débrancher le câble USB.")) return;
+    await action("Éjection", async () => {
+      const result = await ejectPsp(pspRoot);
+      setPspRoot(""); setDeploymentReport(undefined);
+      return result;
+    });
   };
   const refreshFiles = async () => setFileEntries(await listProjectFiles(active));
   const openFile = async (entry: ProjectFileEntry) => {
@@ -164,6 +181,7 @@ export default function App() {
   const compileActiveProject = async () => {
     setStatus(`${buildAction}…`);
     setBuildReport(undefined);
+    setDeploymentReport(undefined);
     setConsoleOpen(true);
     try {
       if (dirty) {
@@ -230,8 +248,8 @@ export default function App() {
       <header><div><strong>{active || "Aucun projet"}</strong><span>{dirty ? `● ${activeFile} modifié` : `${activeFile}${activeFileReadOnly ? " · lecture seule" : ""}`}</span></div><button className="environment" onClick={() => setView("environment")}><span className={environment?.pspdevReady ? "ok" : "missing"}>● PSPDEV</span><span className={environment?.ppssppReady ? "ok" : "missing"}>● PPSSPP</span></button><div className="toolbar"><button disabled={!activeFile || !dirty || activeFileReadOnly} onClick={() => action("Sauvegarde", async () => { await saveProjectFile(active, activeFile, source); setDirty(false); })}>Enregistrer</button><button disabled={!active || !environment?.ppssppReady} onClick={() => action("Test", () => runInPpsspp(active))}>Tester</button><button className="build" disabled={!canBuild} title={isLuaProject ? activeProject?.runtimeVersion : environment?.pspdevVersion} onClick={compileActiveProject}>{buildLabel}</button></div></header>
       {activeFile ? <div className="editor-host"><Editor key={activeFile} height="100%" language={editorLanguage} theme="vs-dark" value={source} onMount={mountEditor} onChange={v => { if (!activeFileReadOnly) { setSource(v ?? ""); setDirty(true); } }} options={{ minimap:{enabled:false}, fontSize:14, automaticLayout:true, tabSize:4, readOnly:activeFileReadOnly }}/></div>
       : <div className="welcome"><div><span>🎮</span><h1>Crée ton premier jeu PSP</h1><p>Un projet C++ prêt à compiler et à lancer sur PPSSPP en quelques secondes.</p><button className="build" onClick={() => setShowCreate(true)}>Créer un jeu</button></div></div>}
-      <footer><div className="deploy-bar"><b>Installation PSP</b><input readOnly value={pspRoot} placeholder="Aucun volume sélectionné"/><button onClick={choosePsp}>Choisir</button><button disabled={!pspRoot || !active} onClick={installOnPsp}>Installer sur ma PSP</button><button className="console-toggle" onClick={() => setConsoleOpen(open => !open)}>{consoleOpen ? "Masquer la console" : "Afficher la console"}</button></div>
-        {consoleOpen && <section className="build-console"><div className="console-title"><b>Sortie</b><span className={buildReport ? (buildReport.success ? "success" : "failure") : ""}>{status}</span>{buildReport && <small>{buildReport.sourceCount} source(s)</small>}</div>{buildReport?.diagnostics.length ? <div className="diagnostic-list">{buildReport.diagnostics.map((diagnostic, index) => <button className={diagnostic.severity} onClick={() => openDiagnostic(diagnostic)} key={`${diagnostic.file}:${diagnostic.line}:${index}`}><b>{diagnostic.severity === "error" ? "Erreur" : diagnostic.severity === "warning" ? "Avertissement" : "Note"}</b><span>{diagnostic.file}:{diagnostic.line}:{diagnostic.column}</span><em>{diagnostic.message}</em></button>)}</div> : null}<pre>{buildReport?.output ?? status}</pre></section>}
+      <footer><div className="deploy-bar"><b>Installation PSP</b><input readOnly value={pspRoot} placeholder="Aucun volume sélectionné"/><button onClick={choosePsp}>Choisir</button><button disabled={!pspRoot || !active} onClick={installOnPsp}>Compiler & installer</button><button disabled={!pspRoot} onClick={safelyEjectPsp}>Éjecter</button><button className="console-toggle" onClick={() => setConsoleOpen(open => !open)}>{consoleOpen ? "Masquer la console" : "Afficher la console"}</button></div>
+        {consoleOpen && <section className="build-console"><div className="console-title"><b>Sortie</b><span className={buildReport ? (buildReport.success ? "success" : "failure") : ""}>{status}</span>{buildReport && <small>{buildReport.sourceCount} source(s)</small>}</div>{deploymentReport && <div className="deployment-result"><b>✓ Copie vérifiée</b><span>{deploymentReport.files} fichier(s) · {(deploymentReport.bytes / 1024).toFixed(1)} Kio</span><code title={deploymentReport.ebootSha256}>SHA-256 {deploymentReport.ebootSha256.slice(0, 16)}…</code></div>}{buildReport?.diagnostics.length ? <div className="diagnostic-list">{buildReport.diagnostics.map((diagnostic, index) => <button className={diagnostic.severity} onClick={() => openDiagnostic(diagnostic)} key={`${diagnostic.file}:${diagnostic.line}:${index}`}><b>{diagnostic.severity === "error" ? "Erreur" : diagnostic.severity === "warning" ? "Avertissement" : "Note"}</b><span>{diagnostic.file}:{diagnostic.line}:{diagnostic.column}</span><em>{diagnostic.message}</em></button>)}</div> : null}<pre>{buildReport?.output ?? status}</pre></section>}
       </footer></> : view === "pbp" ? <PbpStudio/> : view === "help" ? <Help onNewProject={language => { setNewLanguage(language); setNewTemplate(templates[language][0].id); if (language === "lua") setNewRuntime("lpp-r163"); setShowCreate(true); }}/> : <EnvironmentPanel
         environment={environment}
         refreshing={environmentRefreshing}
